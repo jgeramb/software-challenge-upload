@@ -38,21 +38,24 @@ const hideClients = async (clientIds, cookies, csrfToken) => {
 
   for (const client of clientIds) {
     await axios.post(`${BASE_URL}/seasons/${SEASON_YEAR}/contestants/${TEAM_ID}/clients/${client}/hide`, params, {
+      maxRedirects: 0,
       headers: {
         "Content-Type": "application/x-www-form-urlencoded",
+        Referer: `${BASE_URL}/seasons/${SEASON_YEAR}/contestants/${TEAM_ID}/clients`,
         Cookie: cookies
-      }
+      },
+      validateStatus: (status) => status >= 200 && status <= 302
     });
   }
 };
-const sendUploadForm = (name, file, cookies, csrfToken) => {
+const sendUploadForm = (name, parameters, file, cookies, csrfToken) => {
   const formData = new FormData();
   formData.append("utf8", "✓");
   formData.append("authenticity_token", csrfToken);
   formData.append("client[name]", name);
-  formData.append("client[parameters]", "");
+  formData.append("client[parameters]", parameters);
   formData.append("client[image_name]", "openjdk:18");
-  formData.append("client[file]", new Blob([file]), "teamgruen-player.jar");
+  formData.append("client[file]", new Blob([file]), "client.jar");
   formData.append("commit", "Computerspieler erstellen");
 
   return axios.post(`${BASE_URL}/seasons/${SEASON_YEAR}/contestants/${TEAM_ID}/clients`, formData, {
@@ -70,14 +73,17 @@ const testClient = async (clientId, cookies, csrfToken) => {
   params.append("authenticity_token", csrfToken);
 
   await axios.post(`${BASE_URL}/seasons/${SEASON_YEAR}/contestants/${TEAM_ID}/clients/${clientId}/test`, params, {
+    maxRedirects: 0,
     headers: {
       "Content-Type": "application/x-www-form-urlencoded",
+      Referer: `${BASE_URL}/seasons/${SEASON_YEAR}/contestants/${TEAM_ID}/clients`,
       Cookie: cookies
-    }
+    },
+    validateStatus: (status) => status >= 200 && status <= 302
   });
 };
 
-const uploadClient = async (name, file) => {
+const uploadClient = async (name, parameters, file) => {
   // login
   const loginPage = await loadLoginPage();
   const loginResponse = await sendLoginForm(extractCookies(loginPage), extractCSRFToken(loginPage));
@@ -85,16 +91,19 @@ const uploadClient = async (name, file) => {
 
   // hide old clients
   const oldListPage = await loadListPage(authCookies);
-  const oldClientIds = oldListPage.data.match(/id="client-(\d+)"/g).map((id) => id.match(/id="client-(\d+)"/)[1]);
-  await hideClients(oldClientIds, authCookies, extractCSRFToken(oldListPage));
+  const oldClientIds = oldListPage.data.match(/id='client-(\d+)'/g)?.map((id) => id.match(/id='client-(\d+)'/)[1]) || [];
+
+  if (oldClientIds.length > 0) await hideClients(oldClientIds, authCookies, extractCSRFToken(oldListPage));
 
   // upload new client
   const uploadPage = await loadUploadPage(authCookies);
-  await sendUploadForm(name, file, extractCookies(uploadPage), extractCSRFToken(uploadPage));
+  await sendUploadForm(name, parameters, file, extractCookies(uploadPage), extractCSRFToken(uploadPage));
+
+  await new Promise((resolve) => setTimeout(resolve, 500));
 
   // test new client
   const newListPage = await loadListPage(authCookies);
-  const newClientId = newListPage.data.match(/id="client-(\d+)"/)[1];
+  const newClientId = newListPage.data.match(/id='client-(\d+)'/)[1];
   await testClient(newClientId, authCookies, extractCSRFToken(newListPage));
 };
 
