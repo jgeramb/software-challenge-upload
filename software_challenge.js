@@ -1,12 +1,20 @@
 const env = require("dotenv").config().parsed;
 const axios = require("axios");
 
-const BASE_URL = "https://contest.software-challenge.de";
-const SEASON_YEAR = 2024;
-const TEAM_ID = 2374;
+const BASE_URL = env.SC_BASE_URL;
+const SEASON_YEAR = env.SC_SEASON_YEAR;
+const TEAM_ID = env.SC_TEAM_ID;
 
 const extractCSRFToken = (response) => response.data.match(/<meta name="csrf-token" content="(.*)"/)[1];
-const extractCookies = (response) => response.headers["set-cookie"].map((cookie) => cookie.split(";")[0]).join(";");
+const replaceCookies = (cookieStore, response) => {
+  response.headers["set-cookie"]
+    ?.map((cookie) => cookie.split(";")[0])
+    .forEach((cookie) => (cookieStore[cookie.split("=")[0]] = cookie.split("=")[1]));
+};
+const toCookieString = (cookieStore) =>
+  Object.entries(cookieStore)
+    .map(([key, value]) => `${key}=${value}`)
+    .join("; ");
 
 const loadLoginPage = () => axios.get(`${BASE_URL}/login`);
 const loadUploadPage = (cookies) => axios.get(`${BASE_URL}/login`, { headers: { Cookie: cookies } });
@@ -48,20 +56,21 @@ const hideClients = async (clientIds, cookies, csrfToken) => {
     });
   }
 };
-const sendUploadForm = (name, parameters, file, cookies, csrfToken) => {
+const sendUploadForm = (name, parameters, fileName, file, cookies, csrfToken) => {
   const formData = new FormData();
   formData.append("utf8", "✓");
   formData.append("authenticity_token", csrfToken);
+  formData.append("client[file]", new Blob([file]), fileName);
   formData.append("client[name]", name);
   formData.append("client[parameters]", parameters);
   formData.append("client[image_name]", "openjdk:18");
-  formData.append("client[file]", new Blob([file]), "client.jar");
   formData.append("commit", "Computerspieler erstellen");
 
   return axios.post(`${BASE_URL}/seasons/${SEASON_YEAR}/contestants/${TEAM_ID}/clients`, formData, {
     maxRedirects: 0,
     headers: {
       "Content-Type": "multipart/form-data",
+      Referer: `${BASE_URL}/seasons/${SEASON_YEAR}/contestants/${TEAM_ID}/clients/new`,
       Cookie: cookies
     },
     validateStatus: (status) => status >= 200 && status <= 302
@@ -71,8 +80,9 @@ const testClient = async (clientId, cookies, csrfToken) => {
   const params = new URLSearchParams();
   params.append("_method", "post");
   params.append("authenticity_token", csrfToken);
+  params.append("activateClient", "true");
 
-  await axios.post(`${BASE_URL}/seasons/${SEASON_YEAR}/contestants/${TEAM_ID}/clients/${clientId}/test`, params, {
+  return await axios.post(`${BASE_URL}/seasons/${SEASON_YEAR}/contestants/${TEAM_ID}/clients/${clientId}/test`, params, {
     maxRedirects: 0,
     headers: {
       "Content-Type": "application/x-www-form-urlencoded",
@@ -83,28 +93,41 @@ const testClient = async (clientId, cookies, csrfToken) => {
   });
 };
 
-const uploadClient = async (name, parameters, file) => {
+const uploadClient = async (name, parameters, fileName, file) => {
+  const cookieStore = {};
+
   // login
   const loginPage = await loadLoginPage();
-  const loginResponse = await sendLoginForm(extractCookies(loginPage), extractCSRFToken(loginPage));
-  const authCookies = extractCookies(loginResponse);
+  replaceCookies(cookieStore, loginPage);
+  const loginResponse = await sendLoginForm(toCookieString(cookieStore), extractCSRFToken(loginPage));
+  replaceCookies(cookieStore, loginResponse);
 
   // hide old clients
-  const oldListPage = await loadListPage(authCookies);
+  const oldListPage = await loadListPage(toCookieString(cookieStore));
+  replaceCookies(cookieStore, oldListPage);
   const oldClientIds = oldListPage.data.match(/id='client-(\d+)'/g)?.map((id) => id.match(/id='client-(\d+)'/)[1]) || [];
 
-  if (oldClientIds.length > 0) await hideClients(oldClientIds, authCookies, extractCSRFToken(oldListPage));
+  if (oldClientIds.length > 0) await hideClients(oldClientIds, toCookieString(cookieStore), extractCSRFToken(oldListPage));
 
   // upload new client
-  const uploadPage = await loadUploadPage(authCookies);
-  await sendUploadForm(name, parameters, file, extractCookies(uploadPage), extractCSRFToken(uploadPage));
-
-  await new Promise((resolve) => setTimeout(resolve, 500));
+  const uploadPage = await loadUploadPage(toCookieString(cookieStore));
+  replaceCookies(cookieStore, uploadPage);
+  await sendUploadForm(name, parameters, fileName, file, toCookieString(cookieStore), extractCSRFToken(uploadPage));
 
   // test new client
-  const newListPage = await loadListPage(authCookies);
-  const newClientId = newListPage.data.match(/id='client-(\d+)'/)[1];
-  await testClient(newClientId, authCookies, extractCSRFToken(newListPage));
+  let retries = 0;
+  let newListPage, clientId;
+
+  while (!clientId?.length && retries++ < 5) {
+    newListPage = await loadListPage(toCookieString(cookieStore));
+    replaceCookies(cookieStore, newListPage);
+
+    clientId = newListPage.data.match(/id='client-(\d+)'/);
+
+    new Promise((resolve) => setTimeout(resolve, 500));
+  }
+
+  if (clientId?.length) await testClient(clientId[1], toCookieString(cookieStore), extractCSRFToken(newListPage));
 };
 
 module.exports = {

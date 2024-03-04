@@ -8,7 +8,7 @@ const app = express();
 app.use(cors());
 app.use(express.json());
 
-app.post("/api/v1/upload/:name", bodyParser.raw({ type: "application/octet-stream", limit: "16mb" }), (request, response) => {
+app.post("/api/v1/upload/:name", bodyParser.raw({ type: "application/octet-stream", limit: "16mb" }), async (request, response) => {
   if (!request.headers["x-api-key"]) {
     return response.status(401).json({
       message: "Unauthorized"
@@ -27,6 +27,14 @@ app.post("/api/v1/upload/:name", bodyParser.raw({ type: "application/octet-strea
     });
   }
 
+  const fileName = request.query.fileName;
+
+  if (!fileName) {
+    return response.status(400).json({
+      message: "No file name provided"
+    });
+  }
+
   const parameters = request.query.params || "";
 
   if (!request.body) {
@@ -35,7 +43,7 @@ app.post("/api/v1/upload/:name", bodyParser.raw({ type: "application/octet-strea
     });
   }
 
-  softwareChallenge.uploadClient(request.params.name, parameters, request.body);
+  await softwareChallenge.uploadClient(request.params.name, parameters, fileName, request.body);
 
   return response.status(200).json({
     message: "ok"
